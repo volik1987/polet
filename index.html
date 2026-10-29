@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0d1b2a">
+<title>Полёт по карте</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<script src="airports.js"></script>
+<style>
+:root{
+  --panel:rgba(10,22,36,.72);--panel-b:rgba(255,255,255,.12);--txt:#e8f1fa;--dim:#9db2c7;
+  --acc:#5ec8ff;--ok:#5be39b;--warn:#ffc04d;--bad:#ff5d5d;--sky:#a8c8e6;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#0d1b2a;color:var(--txt);
+  font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
+#map{position:absolute;inset:0;background:var(--sky)}
+#haze{position:absolute;left:0;right:0;top:0;height:34%;pointer-events:none;
+  background:linear-gradient(#8fbbe3 0%,rgba(168,200,230,.85) 35%,rgba(168,200,230,0) 100%);transition:opacity .5s}
+.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.panel{background:var(--panel);border:1px solid var(--panel-b);border-radius:14px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+
+/* самолёт */
+#planeWrap{position:absolute;left:50%;top:72%;width:0;height:0;pointer-events:none;z-index:3}
+#shadow,#plane{position:absolute;width:96px;height:96px;left:-48px;top:-48px}
+#shadow{filter:blur(2px);opacity:.4}
+#plane{filter:drop-shadow(0 6px 8px rgba(0,0,0,.35));transition:opacity .3s}
+#boom{position:absolute;left:-60px;top:-60px;width:120px;height:120px;border-radius:50%;opacity:0;
+  background:radial-gradient(#fff6c2 0%,#ffb13b 30%,#ff4d1f 55%,rgba(60,20,10,0) 72%)}
+#boom.on{animation:boom 1.4s ease-out forwards}
+@keyframes boom{0%{transform:scale(.2);opacity:1}60%{opacity:1}100%{transform:scale(3);opacity:0}}
+
+/* HUD */
+#hud{position:absolute;inset:0;pointer-events:none;z-index:5;display:none}
+#hud.on{display:block}
+#instr{position:absolute;left:12px;top:12px;padding:10px 12px;min-width:168px}
+.row{display:flex;justify-content:space-between;gap:14px;align-items:baseline}
+.lbl{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.big{font-size:26px;font-weight:700}
+.mid{font-size:18px;font-weight:600}
+.unit{font-size:12px;color:var(--dim);margin-left:3px}
+.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;margin:3px 0 6px}
+.bar>i{display:block;height:100%;width:0;background:var(--acc)}
+#flags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.flag{font-size:11px;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.1);color:var(--dim)}
+.flag.on{background:var(--acc);color:#04202f;font-weight:700}
+#nav{position:absolute;left:50%;top:12px;transform:translateX(-50%);padding:8px 14px;display:flex;gap:12px;align-items:center;max-width:calc(100vw - 420px)}
+#arrow{width:34px;height:34px;flex:none;transition:transform .15s linear}
+#navTxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#navTxt b{color:var(--acc)}
+#mini{position:absolute;right:12px;top:12px;width:210px;height:210px;border-radius:14px;overflow:hidden;
+  border:1px solid var(--panel-b);pointer-events:auto;cursor:pointer;transition:width .25s,height .25s}
+#mini.big{width:min(70vw,520px);height:min(60vh,460px)}
+#ils{position:absolute;right:12px;top:234px;width:210px;padding:8px 10px;display:none}
+#ils.on{display:block}
+#ilsBox{position:relative;height:110px;margin-top:4px;border-radius:8px;background:rgba(0,0,0,.25)}
+#ilsBox:before,#ilsBox:after{content:"";position:absolute;background:rgba(255,255,255,.35)}
+#ilsBox:before{left:50%;top:6px;bottom:6px;width:1px}
+#ilsBox:after{top:50%;left:6px;right:6px;height:1px}
+#locDot,#gsDot{position:absolute;width:14px;height:14px;margin:-7px;transform:rotate(45deg);background:#ff5ef0;border-radius:2px}
+#gsDot{background:var(--ok)}
+#ilsHint{font-size:13px;margin-top:6px;color:var(--warn);min-height:18px}
+#warn{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);font-size:30px;font-weight:800;color:var(--bad);
+  text-shadow:0 2px 10px rgba(0,0,0,.6);letter-spacing:.06em;text-align:center}
+#warn.blink{animation:blink .5s steps(2) infinite}
+@keyframes blink{50%{opacity:.2}}
+#toast{position:absolute;left:50%;top:20%;transform:translateX(-50%);padding:10px 18px;font-size:18px;font-weight:600;opacity:0;transition:opacity .4s;text-align:center;max-width:90vw}
+#toast.on{opacity:1}
+#hint{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);padding:7px 14px;font-size:14px;color:var(--dim);max-width:min(640px,calc(100vw - 32px));text-align:center}
+#hint b{color:var(--txt)}
+#osm{position:absolute;right:6px;bottom:4px;font-size:10px;color:#223;background:rgba(255,255,255,.6);padding:1px 5px;border-radius:4px;z-index:6}
+#osm a{color:inherit}
+
+/* тач-управление */
+#touch{position:absolute;inset:0;z-index:6;pointer-events:none;display:none}
+#touch.on{display:block}
+#stick{position:absolute;right:18px;bottom:60px;width:150px;height:150px;border-radius:50%;pointer-events:auto;
+  background:rgba(10,22,36,.45);border:2px solid rgba(255,255,255,.25)}
+#knob{position:absolute;left:50%;top:50%;width:58px;height:58px;margin:-29px;border-radius:50%;background:rgba(94,200,255,.75)}
+#thrPad{position:absolute;left:18px;bottom:60px;width:64px;height:180px;border-radius:16px;pointer-events:auto;
+  background:rgba(10,22,36,.45);border:2px solid rgba(255,255,255,.25);overflow:hidden}
+#thrFill{position:absolute;left:0;right:0;bottom:0;background:rgba(94,200,255,.55)}
+#thrPad span{position:absolute;left:0;right:0;top:6px;text-align:center;font-size:11px;color:var(--dim)}
+#tbtns{position:absolute;left:96px;right:180px;bottom:60px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;pointer-events:none}
+#tbtns button{pointer-events:auto}
+.tb{min-width:54px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:rgba(10,22,36,.6);color:var(--txt);font-weight:700;font-size:13px}
+.tb.on{background:var(--acc);color:#04202f}
+
+/* экраны */
+.screen{position:absolute;inset:0;z-index:20;display:none;align-items:center;justify-content:center;padding:16px;
+  background:radial-gradient(ellipse at top,rgba(13,27,42,.55),rgba(13,27,42,.88));overflow:auto}
+.screen.on{display:flex}
+.card{width:min(560px,100%);padding:22px;margin:auto}
+h1{margin:0 0 4px;font-size:30px;letter-spacing:.01em}
+h1 span{color:var(--acc)}
+.sub{color:var(--dim);margin:0 0 18px}
+.field{position:relative;margin-bottom:12px}
+.field label{display:block;font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.field input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--panel-b);background:rgba(255,255,255,.07);color:var(--txt);font-size:16px;outline:none;-webkit-user-select:text;user-select:text}
+.field input:focus{border-color:var(--acc)}
+.sugg{position:absolute;left:0;right:0;top:100%;z-index:3;background:#13263a;border:1px solid var(--panel-b);border-radius:10px;margin-top:4px;overflow:hidden;display:none}
+.sugg.on{display:block}
+.sugg div{padding:9px 12px;cursor:pointer;font-size:14px;border-bottom:1px solid rgba(255,255,255,.05)}
+.sugg div:hover{background:rgba(94,200,255,.15)}
+.sugg small{color:var(--dim);display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#swap{position:absolute;right:10px;top:74px;z-index:2;width:34px;height:34px;border-radius:50%;border:1px solid var(--panel-b);background:#13263a;color:var(--txt);cursor:pointer;font-size:16px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 14px}
+.chip{padding:6px 10px;border-radius:999px;border:1px solid var(--panel-b);background:rgba(255,255,255,.05);color:var(--txt);font-size:13px;cursor:pointer}
+.chip:hover{border-color:var(--acc)}
+.opts{display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:16px;font-size:14px;color:var(--dim)}
+.opts label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 20px;border-radius:12px;border:0;font-size:16px;font-weight:700;cursor:pointer;background:var(--acc);color:#04202f}
+.btn.sec{background:rgba(255,255,255,.1);color:var(--txt)}
+.btn:disabled{opacity:.5;cursor:wait}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+#status{min-height:20px;margin-top:12px;color:var(--warn);font-size:14px}
+details{margin-top:16px;color:var(--dim);font-size:13px}
+summary{cursor:pointer;color:var(--txt)}
+table.keys{border-collapse:collapse;margin-top:8px;width:100%}
+table.keys td{padding:3px 6px;vertical-align:top}
+table.keys td:first-child{white-space:nowrap;color:var(--txt)}
+kbd{font:12px ui-monospace,Menlo,monospace;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.15)}
+#resTitle{margin:0 0 4px;font-size:26px}
+#stars{font-size:34px;letter-spacing:4px;color:var(--warn);margin:6px 0}
+.stats{display:grid;grid-template-columns:1fr auto;gap:4px 16px;margin:12px 0 18px;font-size:14px}
+.stats div:nth-child(odd){color:var(--dim)}
+#pauseCard{text-align:center}
+
+@media (max-width:760px){
+  #instr{left:8px;top:8px;min-width:0;padding:7px 9px}
+  .big{font-size:20px}.mid{font-size:15px}
+  #nav{top:auto;bottom:250px;max-width:calc(100vw - 24px);padding:6px 10px;font-size:13px}
+  #arrow{width:26px;height:26px}
+  #mini{width:120px;height:120px;right:8px;top:8px}
+  #ils{right:8px;top:136px;width:150px}
+  #ilsBox{height:80px}
+  #shadow,#plane{width:74px;height:74px;left:-37px;top:-37px}
+  #hint{bottom:8px;font-size:12px}
+  #tbtns{left:8px;right:8px;bottom:12px}
+  #stick{bottom:62px}#thrPad{bottom:62px}
+  #hud.touch #hint{display:none}
+  #warn{font-size:22px}
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="haze"></div>
+
+<div id="planeWrap">
+  <svg id="shadow" viewBox="-50 -50 100 100"><use href="#shape" fill="#000"/></svg>
+  <svg id="plane" viewBox="-50 -50 100 100"><use href="#shapeColor"/></svg>
+  <div id="boom"></div>
+</div>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <g id="shape">
+      <path d="M-3-4-47 11v4L-3 8ZM3-4 47 11v4L3 8ZM-2 31-17 41v3l15-3ZM2 31l15 10v3L2 41Z"/>
+      <path d="M0-47c4 2 5 10 5 18v65c0 6-2 10-5 12-3-2-5-6-5-12v-65c0-8 1-16 5-18Z"/>
+    </g>
+    <g id="shapeColor" stroke="#4d5e70" stroke-width=".8" stroke-linejoin="round">
+      <path d="M-3-4-47 11v4L-3 8ZM3-4 47 11v4L3 8Z" fill="#dfe7ef"/>
+      <path d="M-44 11.5v3M44 11.5v3" stroke="#e5484d" stroke-width="2"/>
+      <rect x="-21" y="-4" width="6" height="11" rx="2.5" fill="#8794a3"/>
+      <rect x="15" y="-4" width="6" height="11" rx="2.5" fill="#8794a3"/>
+      <path d="M-2 31-17 41v3l15-3ZM2 31l15 10v3L2 41Z" fill="#dfe7ef"/>
+      <path d="M0-47c4 2 5 10 5 18v65c0 6-2 10-5 12-3-2-5-6-5-12v-65c0-8 1-16 5-18Z" fill="#f7fafc"/>
+      <path d="M0 26v22" stroke="#1f6fd1" stroke-width="3"/>
+      <path d="M-3.2-38q3.2-4 6.4 0v3h-6.4Z" fill="#23384d" stroke="none"/>
+    </g>
+  </defs>
+</svg>
+
+<div id="hud">
+  <div id="instr" class="panel">
+    <div class="row"><span class="lbl">Скорость</span><span><span id="hSpd" class="big mono">0</span><span class="unit">км/ч</span></span></div>
+    <div class="row"><span class="lbl">Высота</span><span><span id="hAlt" class="big mono">0</span><span class="unit">м</span></span></div>
+    <div class="row"><span class="lbl">Вертик.</span><span><span id="hVs" class="mid mono">0</span><span class="unit">м/с</span></span></div>
+    <div class="row"><span class="lbl">Курс</span><span><span id="hHdg" class="mid mono">000</span><span class="unit">°</span></span></div>
+    <div class="lbl" style="margin-top:6px">Тяга <span id="hThr" class="mono">0%</span></div>
+    <div class="bar"><i id="bThr"></i></div>
+    <div class="lbl">Топливо <span id="hFuel" class="mono">100%</span></div>
+    <div class="bar"><i id="bFuel" style="background:var(--ok)"></i></div>
+    <div id="flags">
+      <span class="flag" id="fFlaps">ЗАКР</span><span class="flag" id="fBrake">ТОРМ</span>
+      <span class="flag" id="fAp">АП</span><span class="flag on" id="fTs">×1</span>
+    </div>
+  </div>
+  <div id="nav" class="panel">
+    <svg id="arrow" viewBox="-20 -20 40 40"><circle r="18" fill="rgba(94,200,255,.15)" stroke="rgba(94,200,255,.6)"/><path d="M0-14 9 10 0 5-9 10Z" fill="#5ec8ff"/></svg>
+    <div id="navTxt"></div>
+  </div>
+  <div id="mini" title="Нажмите, чтобы увеличить"></div>
+  <div id="ils" class="panel">
+    <div class="lbl">Заход на посадку</div>
+    <div id="ilsBox"><div id="locDot"></div><div id="gsDot"></div></div>
+    <div id="ilsHint"></div>
+  </div>
+  <div id="warn"></div>
+  <div id="toast" class="panel"></div>
+  <div id="hint" class="panel"></div>
+</div>
+
+<div id="touch">
+  <div id="thrPad"><div id="thrFill"></div><span>ГАЗ</span></div>
+  <div id="stick"><div id="knob"></div></div>
+  <div id="tbtns">
+    <button class="tb" id="tFlaps">ЗАКР</button>
+    <button class="tb" id="tBrake">ТОРМ</button>
+    <button class="tb" id="tAp">АП</button>
+    <button class="tb" id="tTs">×1</button>
+    <button class="tb" id="tCam">📷</button>
+    <button class="tb" id="tPause">⏸</button>
+  </div>
+</div>
+<div id="osm">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></div>
+
+<!-- Стартовый экран -->
+<div id="startScr" class="screen on">
+  <div class="card panel">
+    <h1>Полёт <span>по карте</span></h1>
+    <p class="sub">Выберите, откуда и куда лететь. Взлетите с настоящей полосы, долетите и посадите самолёт.</p>
+    <div style="position:relative">
+      <div class="field"><label>Откуда</label><input id="inFrom" placeholder="Город или аэропорт" autocomplete="off"><div class="sugg" id="sgFrom"></div></div>
+      <button id="swap" title="Поменять местами">⇅</button>
+      <div class="field"><label>Куда</label><input id="inTo" placeholder="Город или аэропорт" autocomplete="off"><div class="sugg" id="sgTo"></div></div>
+    </div>
+    <div class="lbl" style="margin-top:4px">Быстрые маршруты</div>
+    <div class="chips" id="chips"></div>
+    <div class="opts">
+      <label><input type="checkbox" id="oAir"> Старт сразу в воздухе</label>
+      <label><input type="checkbox" id="oWind" checked> Ветер</label>
+      <label><input type="checkbox" id="oInv"> Инверсия тангажа</label>
+    </div>
+    <button class="btn" id="goBtn">✈ Полетели</button>
+    <div id="status"></div>
+    <details>
+      <summary>Управление</summary>
+      <table class="keys">
+        <tr><td><kbd>W</kbd>/<kbd>S</kbd></td><td>газ больше / меньше</td></tr>
+        <tr><td><kbd>←</kbd><kbd>→</kbd> или <kbd>A</kbd><kbd>D</kbd></td><td>крен — поворот</td></tr>
+        <tr><td><kbd>↑</kbd><kbd>↓</kbd></td><td>нос вверх (набор) / вниз (снижение)</td></tr>
+        <tr><td><kbd>F</kbd></td><td>закрылки — для взлёта и посадки</td></tr>
+        <tr><td><kbd>Пробел</kbd></td><td>тормоз (в воздухе — интерцепторы)</td></tr>
+        <tr><td><kbd>Q</kbd></td><td>автопилот до точки захода на посадку</td></tr>
+        <tr><td><kbd>1</kbd>…<kbd>7</kbd>, <kbd>T</kbd></td><td>ускорение времени ×1…×64</td></tr>
+        <tr><td><kbd>C</kbd>, колесо, <kbd>+</kbd>/<kbd>−</kbd></td><td>камера и масштаб</td></tr>
+        <tr><td><kbd>P</kbd>, <kbd>M</kbd></td><td>пауза, звук</td></tr>
+      </table>
+      <p>Взлёт: полный газ, на ~240 км/ч тяните ↑. Посадка: скорость ниже 300 км/ч, закрылки, держитесь ромбиков в окне «Заход на посадку», перед касанием чуть приподнимите нос.</p>
+    </details>
+  </div>
+</div>
+
+<!-- Пауза -->
+<div id="pauseScr" class="screen">
+  <div class="card panel" id="pauseCard">
+    <h1>Пауза</h1>
+    <p class="sub" id="pauseRoute"></p>
+    <div class="btns" style="justify-content:center">
+      <button class="btn" id="resumeBtn">Продолжить</button>
+      <button class="btn sec" id="restartBtn">Заново</button>
+      <button class="btn sec" id="menuBtn">Новый маршрут</button>
+    </div>
+  </div>
+</div>
+
+<!-- Результат -->
+<div id="resScr" class="screen">
+  <div class="card panel">
+    <h2 id="resTitle"></h2>
+    <div id="resSub" class="sub"></div>
+    <div id="stars"></div>
+    <div class="stats" id="stats"></div>
+    <div class="btns">
+      <button class="btn" id="againBtn">Ещё раз</button>
+      <button class="btn sec" id="backBtn">Обратный рейс</button>
+      <button class="btn sec" id="newBtn">Новый маршрут</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ---------- гео ---------- */
+const R = 6371000, D2R = Math.PI / 180;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
+function brg(a, b) {
+  const p1 = a[1] * D2R, p2 = b[1] * D2R, dl = (b[0] - a[0]) * D2R;
+  const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(y, x) / D2R + 360) % 360;
+}
+function dist(a, b) {
+  const p1 = a[1] * D2R, p2 = b[1] * D2R, dp = p2 - p1, dl = (b[0] - a[0]) * D2R;
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function offset(p, b, d) {
+  const p1 = p[1] * D2R, l1 = p[0] * D2R, t = b * D2R, dr = d / R;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(dr) + Math.cos(p1) * Math.sin(dr) * Math.cos(t));
+  const l2 = l1 + Math.atan2(Math.sin(t) * Math.sin(dr) * Math.cos(p1), Math.cos(dr) - Math.sin(p1) * Math.sin(p2));
+  return [((l2 / D2R + 540) % 360) - 180, p2 / D2R];
+}
+function gcLine(a, b, n = 96) {
+  const p1 = a[1] * D2R, l1 = a[0] * D2R, p2 = b[1] * D2R, l2 = b[0] * D2R, d = dist(a, b) / R;
+  if (d < 1e-6) return [a, b];
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const f = i / n, A = Math.sin((1 - f) * d) / Math.sin(d), B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(p1) * Math.cos(l1) + B * Math.cos(p2) * Math.cos(l2);
+    const y = A * Math.cos(p1) * Math.sin(l1) + B * Math.cos(p2) * Math.sin(l2);
+    const z = A * Math.sin(p1) + B * Math.sin(p2);
+    out.push([Math.atan2(y, x) / D2R, Math.atan2(z, Math.hypot(x, y)) / D2R]);
+  }
+  return out;
+}
+// Положение точки относительно ВПП: along — вдоль оси от центра, cross — вправо от оси
+function rwFrame(rw, p) {
+  const kx = Math.cos(rw.c[1] * D2R) * R * D2R, ky = R * D2R;
+  const x = (p[0] - rw.c[0]) * kx, y = (p[1] - rw.c[1]) * ky, h = rw.hdg * D2R;
+  return { along: x * Math.sin(h) + y * Math.cos(h), cross: x * Math.cos(h) - y * Math.sin(h) };
+}
+function makeRw(p1, p2, width, prefer) {
+  let h = brg(p1, p2);
+  if (Math.abs(angDiff(h, prefer)) > 90) { [p1, p2] = [p2, p1]; h = brg(p1, p2); }
+  return { a: p1, b: p2, hdg: h, len: dist(p1, p2), width: clamp(width, 30, 80), c: [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2] };
+}
+const synthRw = (c, h) => makeRw(offset(c, h + 180, 1600), offset(c, h, 1600), 50, h);
+function rwPoly(rw) {
+  const w = rw.width / 2;
+  return [offset(rw.a, rw.hdg - 90, w), offset(rw.a, rw.hdg + 90, w), offset(rw.b, rw.hdg + 90, w), offset(rw.b, rw.hdg - 90, w), offset(rw.a, rw.hdg - 90, w)];
+}
+
+/* ---------- поиск мест и аэропортов ---------- */
+async function getJSON(url, opts = {}, ms = 15000) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ctl.signal });
+    if (!r.ok) throw new Error(r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+const geocode = q => getJSON('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=ru&q=' + encodeURIComponent(q), {}, 8000)
+  .then(a => a.map(r => ({ name: r.name || r.display_name.split(',')[0], full: r.display_name, lat: +r.lat, lon: +r.lon })));
+// База аэропортов (OurAirports): [iata, имя, имя_en, город, страна, lat, lon, крупный, le_lat, le_lon, he_lat, he_lon, ширина_м]
+const shortName = (n, en) => n.replace(/^(международный|национальный|нацыянальны)?\s*(аэропорт|аэрапорт)\s*/i, '').trim() || en;
+const AP = (window.AIRPORTS || []).map(a => ({
+  iata: a[0], name: shortName(a[1], a[2]), en: a[2], city: a[3], cc: a[4], lat: a[5], lon: a[6], big: a[7],
+  rw: { p1: [a[9], a[8]], p2: [a[11], a[10]], width: a[12] || 45 }
+}));
+const apByIata = Object.fromEntries(AP.map(a => [a.iata, a]));
+const apPlace = a => ({ name: a.name, full: `${a.iata} · ${a.city}, ${a.cc}`, lat: a.lat, lon: a.lon, ap: a });
+function searchAirports(q) {
+  q = q.toLowerCase();
+  const hit = [];
+  for (const a of AP) {
+    const s = a.iata.toLowerCase() === q ? 0 : a.name.toLowerCase().includes(q) ? 1 : (a.city + ' ' + a.en).toLowerCase().includes(q) ? 2 : -1;
+    if (s >= 0) hit.push([s - a.big * .5, a]);
+  }
+  return hit.sort((x, y) => x[0] - y[0]).slice(0, 4).map(h => apPlace(h[1]));
+}
+// Ближайший аэропорт к выбранному месту; если рядом нет — строим полосу прямо там
+function findAirport(pl) {
+  const toObj = a => {
+    const c = [(a.rw.p1[0] + a.rw.p2[0]) / 2, (a.rw.p1[1] + a.rw.p2[1]) / 2];
+    return { name: a.name, iata: a.iata, c, rw: dist(a.rw.p1, a.rw.p2) > 800 ? a.rw : null };
+  };
+  if (pl.ap) return toObj(pl.ap);
+  let best = null, bs = Infinity;
+  for (const a of AP) {
+    if (Math.abs(a.lat - pl.lat) > 1.2) continue;
+    const d = dist([pl.lon, pl.lat], [a.lon, a.lat]);
+    if (d > 90000) continue;
+    const s = d * (a.big ? 1 : 1.6);
+    if (s < bs) { bs = s; best = a; }
+  }
+  return best ? toObj(best) : { name: pl.name, c: [pl.lon, pl.lat], rw: null };
+}
+
+const PRESETS = [
+  ['Минск → Вильнюс', 'MSQ', 'VNO'],
+  ['Москва → Санкт-Петербург', 'SVO', 'LED'],
+  ['Казань → Москва', 'KZN', 'VKO'],
+  ['Москва → Сочи', 'DME', 'AER'],
+  ['Петербург → Калининград', 'LED', 'KGD'],
+  ['Париж → Лондон', 'CDG', 'LHR'],
+  ['Нью-Йорк → Бостон', 'JFK', 'BOS'],
+].filter(p => apByIata[p[1]] && apByIata[p[2]]);
+
+/* ---------- карта ---------- */
+const STYLE = {
+  version: 8,
+  sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19 } },
+  layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#a8c8e6' } },
+           { id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-fade-duration': 0 } }]
+};
+const fc = f => ({ type: 'FeatureCollection', features: f });
+const line = c => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: c } });
+const poly = (c, kind) => ({ type: 'Feature', properties: { kind }, geometry: { type: 'Polygon', coordinates: [c] } });
+
+const map = new maplibregl.Map({ container: 'map', style: STYLE, center: [37.6, 55.7], zoom: 4.5, interactive: false, attributionControl: false, maxPitch: 75, fadeDuration: 0 });
+const mini = new maplibregl.Map({ container: 'mini', style: STYLE, center: [37.6, 55.7], zoom: 4, interactive: false, attributionControl: false, fadeDuration: 0 });
+const ready = m => new Promise(r => { const ok = () => m.style?._loaded ? r() : setTimeout(ok, 50); ok(); });
+
+function addLayers(m, full) {
+  for (const id of ['route', 'trail', 'rw', 'rwc', 'appr']) m.addSource(id, { type: 'geojson', data: fc([]) });
+  m.addLayer({ id: 'route', type: 'line', source: 'route', paint: { 'line-color': '#1f6fd1', 'line-width': full ? 3 : 2, 'line-dasharray': [2, 1.5], 'line-opacity': .8 } });
+  m.addLayer({ id: 'trail', type: 'line', source: 'trail', paint: { 'line-color': '#ff7a1a', 'line-width': full ? 3 : 2, 'line-opacity': .85 } });
+  m.addLayer({ id: 'rw', type: 'fill', source: 'rw', paint: { 'fill-color': ['match', ['get', 'kind'], 'dest', '#2c3440', '#3a414b'], 'fill-opacity': .9 } });
+  m.addLayer({ id: 'rwo', type: 'line', source: 'rw', paint: { 'line-color': ['match', ['get', 'kind'], 'dest', '#5be39b', '#ffffff'], 'line-width': full ? 2 : 1.5 } });
+  if (full) {
+    m.addLayer({ id: 'rwc', type: 'line', source: 'rwc', paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-dasharray': [4, 4] } });
+    m.addLayer({ id: 'appr', type: 'line', source: 'appr', paint: { 'line-color': '#ff5ef0', 'line-width': 2, 'line-dasharray': [3, 3], 'line-opacity': .8 } });
+  }
+}
+Promise.all([ready(map), ready(mini)]).then(() => { addLayers(map, true); addLayers(mini, false); });
+
+const miniEl = document.createElement('div');
+miniEl.innerHTML = '<svg width="22" height="22" viewBox="-50 -50 100 100"><use href="#shape" fill="#ff7a1a" stroke="#fff" stroke-width="6"/></svg>';
+const miniMarker = new maplibregl.Marker({ element: miniEl, rotationAlignment: 'map' });
+const destEl = document.createElement('div');
+destEl.style.cssText = 'font:600 13px system-ui;color:#fff;background:rgba(20,120,70,.85);padding:3px 8px;border-radius:8px;white-space:nowrap';
+const destMarker = new maplibregl.Marker({ element: destEl, anchor: 'bottom', offset: [0, -6] });
+
+/* ---------- звук ---------- */
+const Snd = {
+  ctx: null, on: true,
+  init() {
+    if (this.ctx) return;
+    try {
+      const c = this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const buf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate), d = buf.getChannelData(0);
+      let last = 0;
+      for (let i = 0; i < d.length; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; }
+      const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+      this.lp = c.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.frequency.value = 300;
+      this.g = c.createGain(); this.g.gain.value = 0;
+      this.osc = c.createOscillator(); this.osc.type = 'sawtooth'; this.osc.frequency.value = 90;
+      this.og = c.createGain(); this.og.gain.value = 0;
+      src.connect(this.lp).connect(this.g).connect(c.destination);
+      this.osc.connect(this.og).connect(c.destination);
+      src.start(); this.osc.start();
+    } catch (e) { this.ctx = null; }
+  },
+  update(thr, v, alive) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime, k = this.on && alive && !G.paused ? 1 : 0;
+    this.lp.frequency.setTargetAtTime(250 + thr * 900 + v * 2, t, .2);
+    this.g.gain.setTargetAtTime(k * (0.08 + thr * 0.22 + Math.min(v, 250) / 2500), t, .2);
+    this.osc.frequency.setTargetAtTime(70 + thr * 140, t, .3);
+    this.og.gain.setTargetAtTime(k * (0.004 + thr * 0.012), t, .2);
+  }
+};
+
+/* ---------- состояние ---------- */
+const TS = [1, 2, 4, 8, 16, 32, 64];
+const G = { running: false, paused: false, tsWant: 1, ts: 1, zoomOff: 0, cam: 1, zoomCur: 15, opts: {} };
+const P = {};
+const $ = id => document.getElementById(id);
+const touchMode = matchMedia('(pointer:coarse)').matches;
+
+function startFlight(o, d) {
+  G.from = o; G.to = d;
+  const hRoute = brg(o.c, d.c), hArr = (brg(d.c, o.c) + 180) % 360;
+  G.orw = o.rw ? makeRw(o.rw.p1, o.rw.p2, o.rw.width, hRoute) : synthRw(o.c, hRoute);
+  G.drw = d.rw ? makeRw(d.rw.p1, d.rw.p2, d.rw.width, hArr) : synthRw(d.c, hArr);
+  G.route = gcLine(G.orw.b, offset(G.drw.a, G.drw.hdg + 180, 18000));
+  G.total = dist(G.orw.c, G.drw.c);
+  G.opts = { air: $('oAir').checked, wind: $('oWind').checked, inv: $('oInv').checked };
+  G.wind = null;
+  if (G.opts.wind) { const wd = Math.random() * 360, ws = 6 + Math.random() * 20; G.wind = { from: wd, spd: ws, e: -ws * Math.sin(wd * D2R), n: -ws * Math.cos(wd * D2R) }; }
+  const fuel = Math.min(26000, G.total / 1000 * 3.6 * 1.5 + 2500);
+  Object.assign(P, {
+    alt: 0, v: 0, hdg: G.orw.hdg, gamma: 0, bank: 0, thr: 0, flaps: true, brake: false, ground: true,
+    phase: 'ground', fuel, fuelMax: fuel, simT: 0, ap: false, apAlt: 10000, overrun: false, airborne: false
+  });
+  [P.lon, P.lat] = offset(G.orw.a, G.orw.hdg, 120);
+  if (G.opts.air) {
+    [P.lon, P.lat] = offset(G.orw.b, G.orw.hdg, 9000);
+    Object.assign(P, { alt: 3000, v: 150, thr: .75, flaps: false, ground: false, phase: 'air', airborne: true });
+  }
+  G.trail = [[P.lon, P.lat]]; G.trailT = 0; G.realT = 0; G.tsWant = 1; G.zoomOff = 0;
+  G.zoomCur = zoomFor(P.alt); G.warnTxt = ''; G.hintT = 0;
+
+  const rwF = fc([poly(rwPoly(G.orw), 'orig'), poly(rwPoly(G.drw), 'dest')]);
+  for (const m of [map, mini]) {
+    m.getSource('route').setData(fc([line(G.route)]));
+    m.getSource('trail').setData(fc([line(G.trail)]));
+    m.getSource('rw').setData(rwF);
+  }
+  map.getSource('rwc').setData(fc([line([G.orw.a, G.orw.b]), line([G.drw.a, G.drw.b])]));
+  map.getSource('appr').setData(fc([line([offset(G.drw.a, G.drw.hdg + 180, 20000), G.drw.a])]));
+  destEl.textContent = '🏁 ' + d.name + (d.iata ? ' (' + d.iata + ')' : '');
+  destMarker.setLngLat(G.drw.c).addTo(map);
+  miniMarker.setLngLat([P.lon, P.lat]).addTo(mini);
+  const pts = [...G.route, G.orw.a, G.drw.b], lons = pts.map(p => p[0]), lats = pts.map(p => p[1]);
+  mini.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 22, duration: 0 });
+
+  $('plane').style.opacity = 1; $('boom').classList.remove('on');
+  show(null); $('hud').classList.add('on'); setPad(); $('hud').classList.toggle('touch', touchMode); $('touch').classList.toggle('on', touchMode);
+  G.running = true; G.paused = false;
+  Snd.init(); Snd.ctx?.resume();
+  const km = Math.round(G.total / 1000);
+  toast(`${o.name} → ${d.name} · ${km} км` + (G.wind ? `<br><small>Ветер ${Math.round(G.wind.from)}° ${Math.round(G.wind.spd * 3.6)} км/ч</small>` : ''), 4500);
+}
+
+/* ---------- управление ---------- */
+const keys = {};
+const stick = { x: 0, y: 0 };
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+  keys[e.code] = true;
+  if (e.repeat || !G.running) return;
+  const c = e.code;
+  if (c === 'KeyP' || c === 'Escape') return togglePause();
+  if (G.paused) return;
+  if (c === 'KeyF') toggleFlaps();
+  else if (c === 'KeyQ') toggleAp();
+  else if (c === 'KeyC') G.cam = (G.cam + 1) % 3;
+  else if (c === 'KeyM') Snd.on = !Snd.on;
+  else if (c === 'KeyT') setTs(TS[(TS.indexOf(G.tsWant) + 1) % TS.length]);
+  else if (/^Digit[1-7]$/.test(c)) setTs(TS[+c[5] - 1]);
+  else if (c === 'Equal' || c === 'NumpadAdd') G.zoomOff = clamp(G.zoomOff + .5, -4, 3);
+  else if (c === 'Minus' || c === 'NumpadSubtract') G.zoomOff = clamp(G.zoomOff - .5, -4, 3);
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+$('map').parentElement.addEventListener('wheel', e => { if (G.running) G.zoomOff = clamp(G.zoomOff - e.deltaY / 400, -4, 3); }, { passive: true });
+document.addEventListener('visibilitychange', () => { if (document.hidden && G.running && !G.paused && P.phase !== 'crashed') togglePause(); });
+
+function toggleFlaps() {
+  if (!P.flaps && P.v > 125) return toast('Закрылки нельзя выпускать быстрее 450 км/ч');
+  P.flaps = !P.flaps; toast(P.flaps ? 'Закрылки выпущены' : 'Закрылки убраны', 1200);
+}
+function toggleAp() {
+  if (P.ap) { P.ap = false; return toast('Автопилот выключен', 1500); }
+  if (P.ground || P.alt < 300) return toast('Автопилот — только выше 300 м');
+  if (distToThr() < 26000) return toast('Слишком близко к полосе — сажайте вручную');
+  P.ap = true; P.apAlt = P.alt > 10000 ? Math.round(P.alt / 100) * 100 : 10000;
+  toast(`Автопилот: курс на точку захода, эшелон ${P.apAlt} м`, 2500);
+}
+function setTs(t) { G.tsWant = t; }
+function maxTs() {
+  if (P.phase !== 'air') return 2;
+  if (P.alt < 1000 || distToThr() < 30000) return 2;
+  return 64;
+}
+function togglePause() {
+  if (P.phase === 'crashed' || P.phase === 'done') return;
+  G.paused = !G.paused;
+  $('pauseRoute').textContent = `${G.from.name} → ${G.to.name}`;
+  show(G.paused ? 'pauseScr' : null);
+}
+
+// тач: джойстик и газ
+(function () {
+  const st = $('stick'), kn = $('knob');
+  const mv = e => {
+    const r = st.getBoundingClientRect(), rad = r.width / 2;
+    let x = (e.clientX - r.left - rad) / rad, y = (e.clientY - r.top - rad) / rad;
+    const l = Math.hypot(x, y); if (l > 1) { x /= l; y /= l; }
+    stick.x = x; stick.y = y; kn.style.transform = `translate(${x * rad * .6}px,${y * rad * .6}px)`;
+  };
+  st.addEventListener('pointerdown', e => { st.setPointerCapture(e.pointerId); mv(e); });
+  st.addEventListener('pointermove', e => { if (st.hasPointerCapture(e.pointerId)) mv(e); });
+  const up = () => { stick.x = stick.y = 0; kn.style.transform = ''; };
+  st.addEventListener('pointerup', up); st.addEventListener('pointercancel', up);
+  const tp = $('thrPad');
+  const tm = e => { const r = tp.getBoundingClientRect(); P.thr = clamp(1 - (e.clientY - r.top) / r.height, 0, 1); };
+  tp.addEventListener('pointerdown', e => { tp.setPointerCapture(e.pointerId); tm(e); });
+  tp.addEventListener('pointermove', e => { if (tp.hasPointerCapture(e.pointerId)) tm(e); });
+  $('tFlaps').onclick = toggleFlaps;
+  $('tAp').onclick = toggleAp;
+  $('tTs').onclick = () => setTs(TS[(TS.indexOf(G.tsWant) + 1) % TS.length]);
+  $('tCam').onclick = () => G.cam = (G.cam + 1) % 3;
+  $('tPause').onclick = togglePause;
+  const b = $('tBrake');
+  b.addEventListener('pointerdown', () => keys.Space = true);
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, () => keys.Space = false);
+})();
+$('mini').onclick = () => { $('mini').classList.toggle('big'); setTimeout(() => { mini.resize(); }, 300); };
+
+/* ---------- физика ---------- */
+const Vstall = () => P.flaps ? 52 : 64;   // м/с
+const Vrot = () => P.flaps ? 66 : 78;
+function distToThr() { const f = rwFrame(G.drw, [P.lon, P.lat]); return Math.max(0, -(f.along + G.drw.len / 2)); }
+
+function controls(dt) {
+  let roll = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0) + stick.x;
+  let pitch = (keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0) - stick.y;
+  if (G.opts.inv) pitch = -pitch;
+  roll = clamp(roll, -1, 1); pitch = clamp(pitch, -1, 1);
+  if (keys.KeyW || keys.ShiftLeft) P.thr = Math.min(1, P.thr + dt * .5);
+  if (keys.KeyS || keys.ControlLeft) P.thr = Math.max(0, P.thr - dt * .5);
+  P.brake = !!keys.Space;
+  if (P.ap && (Math.abs(roll) > .15 || Math.abs(pitch) > .15)) { P.ap = false; toast('Автопилот отключён', 1500); }
+  if (P.phase === 'air') {
+    if (P.ap) autopilot(dt);
+    else {
+      if (Math.abs(roll) > .05) P.bank += roll * 45 * dt;
+      else P.bank -= Math.sign(P.bank) * Math.min(Math.abs(P.bank), 25 * dt);
+      P.gamma += pitch * 7 * dt;
+    }
+    P.bank = clamp(P.bank, -40, 40); P.gamma = clamp(P.gamma, -20, 18);
+  }
+  return { roll, pitch };
+}
+function autopilot(dt) {
+  const fix = offset(G.drw.a, G.drw.hdg + 180, 18000), here = [P.lon, P.lat];
+  const dT = distToThr();
+  if (dT < 25000 || dist(here, fix) < 4000) { P.ap = false; toast('Автопилот: точка захода. Дальше — сами! Ловите ромбики.', 4000); return; }
+  const want = clamp(angDiff(P.hdg, brg(here, fix)) * 1.2, -25, 25);
+  P.bank += clamp(want - P.bank, -15 * dt, 15 * dt);
+  const tAlt = Math.min(P.apAlt, Math.max(1000, (dT - 18000) * .055 + 1000));
+  const vs = clamp((tAlt - P.alt) / 12, -14, 11);
+  const gT = Math.asin(clamp(vs / Math.max(P.v, 60), -.3, .3)) / D2R;
+  P.gamma += clamp(gT - P.gamma, -3 * dt, 3 * dt);
+}
+
+function step(dt, ctl) {
+  const g = 9.81, rho = Math.exp(-P.alt / 9000), thr = P.fuel > 0 ? P.thr : 0;
+  const thrust = thr * 3.0 * (0.5 + 0.5 * rho);
+  const k = 4.8e-5 * (0.4 + 0.6 * rho) * (P.flaps ? 4 : 1);
+  let a = thrust - k * P.v * P.v;
+  if (P.ground) {
+    a -= 0.25 + (P.brake ? 3.2 : 0) + (P.phase === 'rollout' && thr < .1 ? 0.6 : 0);
+    P.v = Math.max(0, P.v + a * dt);
+    P.hdg = (P.hdg + ctl.roll * Math.min(1, P.v / 15) * (P.v > 40 ? 3 : 10) * dt + 360) % 360;
+    if (P.phase === 'ground' && ctl.pitch > .2 && P.v >= Vrot()) {
+      P.ground = false; P.phase = 'air'; P.airborne = true; P.gamma = 5; P.alt = 0.5; toast('Взлёт! Набирайте высоту', 2000);
+    }
+    if (P.phase === 'rollout') rollCheck();
+  } else {
+    a -= g * Math.sin(P.gamma * D2R);
+    if (P.brake && P.v > 50) a -= 1.4;
+    P.v = Math.max(0, P.v + a * dt);
+    G.stall = P.v < Vstall();
+    if (G.stall) P.gamma = Math.max(-30, P.gamma - (6 + (Vstall() - P.v) * .6) * dt);
+    const turn = g * Math.tan(P.bank * D2R) / Math.max(P.v, 40) / D2R * 1.5;
+    P.hdg = (P.hdg + turn * dt + 360) % 360;
+    if (P.flaps && P.v > 128) { P.flaps = false; toast('Закрылки убраны автоматически (скорость > 450 км/ч)', 2000); }
+  }
+  const gs = P.v * Math.cos(P.gamma * D2R);
+  let ve = gs * Math.sin(P.hdg * D2R), vn = gs * Math.cos(P.hdg * D2R);
+  if (!P.ground && G.wind) { const f = Math.min(1, .3 + P.alt / 4000); ve += G.wind.e * f; vn += G.wind.n * f; }
+  G.gsp = Math.hypot(ve, vn); G.trk = (Math.atan2(ve, vn) / D2R + 360) % 360;
+  P.lat += vn * dt / R / D2R;
+  P.lon += ve * dt / (R * Math.cos(P.lat * D2R)) / D2R;
+  if (!P.ground) {
+    P.alt += P.v * Math.sin(P.gamma * D2R) * dt;
+    if (P.alt <= 0) { P.alt = 0; touchdown(); }
+  }
+  if (P.fuel > 0) {
+    P.fuel -= (0.2 + 1.3 * thr) * (0.55 + 0.45 * rho) * dt * (P.ground && P.v < 1 ? .3 : 1);
+    if (P.fuel <= 0) { P.fuel = 0; toast('Топливо кончилось! Планируйте к полосе', 4000); }
+  }
+  P.simT += dt;
+}
+
+function touchdown() {
+  const vs = -P.v * Math.sin(P.gamma * D2R), here = [P.lon, P.lat];
+  const check = rw => {
+    const f = rwFrame(rw, here);
+    return { f, on: Math.abs(f.cross) < rw.width / 2 + 35 && Math.abs(f.along) < rw.len / 2 + 150, hd: Math.abs(angDiff(P.hdg, rw.hdg)) };
+  };
+  const d = check(G.drw), o = check(G.orw);
+  const at = d.on && d.hd < 35 ? 'dest' : (o.on && (o.hd < 35 || o.hd > 145) ? 'orig' : null);
+  if (at) {
+    if (Math.abs(P.bank) > 15) return crash('Зацепили крылом полосу — слишком большой крен');
+    if (vs > 7) return crash(`Слишком жёсткая посадка: ${vs.toFixed(1)} м/с`);
+    if (P.v > 106) return crash(`Слишком быстро: ${Math.round(P.v * 3.6)} км/ч на касании`);
+    const f = at === 'dest' ? d.f : o.f;
+    Object.assign(P, { ground: true, phase: 'rollout', gamma: 0, bank: 0, ap: false, vsTD: vs, crossTD: f.cross, vTD: P.v, landedAt: at });
+    G.tsWant = 1;
+    toast(`Касание! ${vs.toFixed(1)} м/с — ${softness(vs)}. Пробел — тормоз`, 3500);
+  } else if (vs < 2.5 && P.v < 80 && Math.abs(P.bank) < 10) {
+    P.ground = true; P.phase = 'done'; P.v = 0; P.vsTD = vs;
+    endGame('field');
+  } else crash(P.fuel <= 0 ? 'Без топлива не дотянули до полосы' : 'Самолёт врезался в землю');
+}
+function rollCheck() {
+  const rw = P.landedAt === 'dest' ? G.drw : G.orw, f = rwFrame(rw, [P.lon, P.lat]);
+  if (!P.overrun && (Math.abs(f.cross) > rw.width / 2 + 60 || Math.abs(f.along) > rw.len / 2 + 250)) {
+    P.overrun = true; toast('Выкатились за пределы полосы!', 2500);
+  }
+  if (P.v < 1.5) { P.v = 0; P.phase = 'done'; endGame(P.landedAt); }
+}
+const softness = vs => vs < 1.5 ? 'бархатная' : vs < 3 ? 'мягкая' : vs < 5 ? 'нормальная' : 'жёсткая';
+
+function crash(reason) {
+  P.phase = 'crashed'; P.v = 0; P.ap = false;
+  $('boom').classList.remove('on'); void $('boom').offsetWidth; $('boom').classList.add('on');
+  $('plane').style.opacity = 0;
+  setTimeout(() => endGame('crash', reason), 1500);
+}
+
+/* ---------- итоги ---------- */
+const fmtT = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(ss).padStart(2, '0'); };
+function endGame(kind, reason) {
+  G.running = false; Snd.update(0, 0, false);
+  $('hud').classList.remove('on'); $('touch').classList.remove('on');
+  const flown = G.trail.reduce((s, p, i) => i ? s + dist(G.trail[i - 1], p) : 0, 0);
+  const fuelPct = Math.round(P.fuel / P.fuelMax * 100);
+  let title, sub, stars = 0, rows = [];
+  if (kind === 'dest') {
+    stars = 3;
+    if (P.vsTD > 3) stars--;
+    if (Math.abs(P.crossTD) > 15 || P.overrun) stars--;
+    if (fuelPct < 5) stars--;
+    stars = Math.max(1, stars);
+    const score = Math.max(0, Math.round(1000 - P.vsTD * 70 - Math.abs(P.crossTD) * 4 + fuelPct * 2 - (P.overrun ? 250 : 0)));
+    title = '✅ Успешная посадка!';
+    sub = `${G.from.name} → ${G.to.name}`;
+    rows = [['Очки', score], ['Касание', `${P.vsTD.toFixed(1)} м/с (${softness(P.vsTD)})`], ['Скорость касания', Math.round(P.vTD * 3.6) + ' км/ч'],
+            ['Отклонение от оси', Math.abs(P.crossTD).toFixed(1) + ' м'], ['Выкатывание', P.overrun ? 'да' : 'нет']];
+    try {
+      const key = 'polet:' + G.from.name + '>' + G.to.name, best = +localStorage.getItem(key) || 0;
+      if (score > best) { localStorage.setItem(key, score); if (best) rows.push(['Рекорд маршрута', 'новый! (было ' + best + ')']); }
+      else rows.push(['Рекорд маршрута', best]);
+    } catch (e) {}
+  } else if (kind === 'orig') {
+    title = '↩ Вернулись в аэропорт вылета'; sub = 'Посадка удалась, но до цели вы не долетели.';
+    rows = [['Касание', `${P.vsTD.toFixed(1)} м/с (${softness(P.vsTD)})`]];
+  } else if (kind === 'field') {
+    title = '🌾 Вынужденная посадка'; sub = 'Самолёт цел, но сели не на полосу. До цели: ' + Math.round(dist([P.lon, P.lat], G.drw.c) / 1000) + ' км.';
+  } else {
+    title = '💥 Катастрофа'; sub = reason || '';
+  }
+  rows.push(['Время полёта', fmtT(P.simT)], ['Пролетели', Math.round(flown / 1000) + ' км'], ['Топливо осталось', fuelPct + '%']);
+  $('resTitle').textContent = title; $('resSub').textContent = sub;
+  $('stars').textContent = stars ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : '';
+  $('stats').innerHTML = rows.map(r => `<div>${r[0]}</div><div class="mono">${r[1]}</div>`).join('');
+  show('resScr');
+}
+
+/* ---------- отрисовка ---------- */
+const zoomFor = alt => 16.2 - Math.log2(1 + alt / 150) * .95;
+let hudT = 0;
+function render(dt) {
+  const zt = zoomFor(P.alt) + G.zoomOff;
+  G.zoomCur += (zt - G.zoomCur) * Math.min(1, dt * 2.5);
+  const pitch = [0, 55, 70][G.cam];
+  map.jumpTo({ center: [P.lon, P.lat], bearing: P.hdg, zoom: G.zoomCur, pitch });
+  $('haze').style.opacity = G.cam ? 1 : 0;
+
+  $('plane').style.transform = `perspective(500px) rotateY(${P.bank}deg) rotateX(${-P.gamma * 1.5}deg)`;
+  const sh = Math.min(P.alt * .05, 40);
+  $('shadow').style.transform = `translate(${sh * .6}px,${sh}px) scale(${1 - Math.min(P.alt / 3000, .5)})`;
+  $('shadow').style.opacity = Math.max(0, .4 - P.alt / 2500);
+
+  hudT -= dt; if (hudT > 0) return; hudT = .1;
+  miniMarker.setLngLat([P.lon, P.lat]).setRotation(P.hdg);
+  const vs = P.v * Math.sin(P.gamma * D2R);
+  $('hSpd').textContent = Math.round(P.v * 3.6);
+  $('hAlt').textContent = Math.round(P.alt);
+  $('hVs').textContent = (vs > 0 ? '+' : '') + vs.toFixed(1);
+  $('hHdg').textContent = String(Math.round(P.hdg) % 360).padStart(3, '0');
+  $('hThr').textContent = Math.round(P.thr * 100) + '%'; $('bThr').style.width = P.thr * 100 + '%';
+  $('thrFill').style.height = P.thr * 100 + '%';
+  const fp = P.fuel / P.fuelMax * 100;
+  $('hFuel').textContent = Math.round(fp) + '%'; $('bFuel').style.width = fp + '%';
+  $('bFuel').style.background = fp < 10 ? 'var(--bad)' : fp < 25 ? 'var(--warn)' : 'var(--ok)';
+  for (const [id, on] of [['fFlaps', P.flaps], ['fBrake', P.brake], ['fAp', P.ap], ['tFlaps', P.flaps], ['tBrake', P.brake], ['tAp', P.ap]]) $(id).classList.toggle('on', on);
+  const tsTxt = '×' + G.ts + (G.ts < G.tsWant ? ' (огр.)' : '');
+  $('fTs').textContent = tsTxt; $('tTs').textContent = '×' + G.ts;
+
+  // навигация
+  const here = [P.lon, P.lat], dT = distToThr(), dC = dist(here, G.drw.a);
+  const target = dT > 20000 ? offset(G.drw.a, G.drw.hdg + 180, Math.min(18000, dT)) : G.drw.a;
+  const b = brg(here, target);
+  $('arrow').style.transform = `rotate(${angDiff(P.hdg, b)}deg)`;
+  const eta = G.gsp > 5 ? fmtT(dC / G.gsp) : '—';
+  $('navTxt').innerHTML = `<b>${G.to.name}</b> · ${(dC / 1000).toFixed(dC < 10000 ? 1 : 0)} км · курс ${String(Math.round(b)).padStart(3, '0')}° · ${eta}`;
+
+  // ILS
+  const f = rwFrame(G.drw, here), thrD = -(f.along + G.drw.len / 2);
+  const ilsOn = P.phase !== 'ground' && thrD > -G.drw.len && thrD < 40000 && Math.abs(f.cross) < 8000;
+  $('ils').classList.toggle('on', ilsOn);
+  let ilsHint = '';
+  if (ilsOn) {
+    const loc = Math.atan2(f.cross, Math.max(thrD, 0) + G.drw.len) / D2R;
+    const gs = Math.atan2(P.alt, Math.max(thrD, 0) + 300) / D2R - 3;
+    const lx = clamp(-loc / 2.5, -1, 1), gy = clamp(gs / .8, -1, 1);
+    $('locDot').style.left = (50 + lx * 44) + '%'; $('locDot').style.top = '50%';
+    $('gsDot').style.left = '50%'; $('gsDot').style.top = (50 + gy * 42) + '%';
+    if (P.phase === 'air') {
+      const h = [];
+      if (lx < -.25) h.push('← левее'); else if (lx > .25) h.push('правее →');
+      if (gy > .3) h.push('ниже ↓'); else if (gy < -.3) h.push('выше ↑');
+      if (P.v > 92 && thrD < 15000) h.push('скорость!');
+      ilsHint = h.join(' · ') || 'на глиссаде ✓';
+    }
+  }
+  $('ilsHint').textContent = ilsHint;
+
+  // предупреждения
+  let w = '';
+  if (P.phase === 'air') {
+    if (G.stall) w = 'СВАЛИВАНИЕ! ↓ нос и газ';
+    else if (vs < -3 && P.alt / -vs < 7 && !(ilsOn && Math.abs(f.cross) < 200 && thrD < 3000 && vs > -8)) w = 'ЗЕМЛЯ! ТЯНИ ВВЕРХ';
+    else if (P.v > 275) w = 'ПРЕВЫШЕНИЕ СКОРОСТИ';
+    else if (fp < 8 && P.fuel > 0) w = 'МАЛО ТОПЛИВА';
+  }
+  $('warn').textContent = w; $('warn').classList.toggle('blink', !!w);
+
+  // подсказки
+  let h = '';
+  if (P.phase === 'ground') h = P.v < 5 ? '<b>W</b> — газ на полную. Разгон по полосе, <b>←→</b> — держать ось'
+    : P.v < Vrot() ? `Разгон… взлёт с ${Math.round(Vrot() * 3.6)} км/ч` : 'Жми <b>↑</b> — отрыв!';
+  else if (P.phase === 'air' && P.alt < 1500 && dT > 40000) h = 'Набор высоты. <b>F</b> — убрать закрылки, <b>Q</b> — автопилот, <b>1–7</b> — ускорить время';
+  else if (P.phase === 'air' && dT < 40000) h = P.flaps ? 'Заход: держите ромбики в центре, скорость ~270 км/ч, у земли чуть <b>↑</b>' : 'Скоро посадка: снижайте скорость (<b>S</b>, <b>Пробел</b>), выпускайте закрылки <b>F</b>';
+  else if (P.phase === 'air') h = 'Стрелка вверху — курс к цели. <b>Q</b> — автопилот, <b>1–7</b> — ускорение времени';
+  else if (P.phase === 'rollout') h = '<b>Пробел</b> — тормоз, газ на ноль <b>S</b>';
+  $('hint').innerHTML = h;
+
+  G.trailT += .1;
+  if (G.trailT > 1 && P.phase !== 'crashed') {
+    G.trailT = 0;
+    const last = G.trail[G.trail.length - 1];
+    if (dist(last, here) > 30) {
+      G.trail.push(here);
+      if (G.trail.length > 4000) G.trail.splice(1, 1);
+      const d = fc([line(G.trail)]);
+      map.getSource('trail').setData(d); mini.getSource('trail').setData(d);
+    }
+  }
+}
+
+let last = performance.now();
+function frame(t) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(.1, (t - last) / 1000); last = t;
+  if (!G.running) return;
+  if (G.paused) { Snd.update(0, 0, false); return; }
+  if (P.phase === 'crashed' || P.phase === 'done') { render(dt); return; }
+  const ctl = controls(dt);
+  G.ts = Math.min(G.tsWant, maxTs());
+  const sim = dt * G.ts, n = Math.ceil(sim / .05);
+  for (let i = 0; i < n && P.phase !== 'crashed' && P.phase !== 'done'; i++) step(sim / n, ctl);
+  render(dt);
+  Snd.update(P.fuel > 0 ? P.thr : 0, P.v, P.phase !== 'crashed');
+}
+requestAnimationFrame(frame);
+
+function setPad() { map.resize(); mini.resize(); map.setPadding({ top: innerHeight * .44, bottom: 0, left: 0, right: 0 }); }
+addEventListener('resize', setPad); setPad();
+
+/* ---------- экраны ---------- */
+let toastTm;
+function toast(html, ms = 2500) { const t = $('toast'); t.innerHTML = html; t.classList.add('on'); clearTimeout(toastTm); toastTm = setTimeout(() => t.classList.remove('on'), ms); }
+function show(id) { for (const s of document.querySelectorAll('.screen')) s.classList.toggle('on', s.id === id); }
+
+const sel = { from: null, to: null };
+function setupInput(inp, box, key) {
+  let tm, seq = 0;
+  inp.addEventListener('input', () => {
+    sel[key] = null; clearTimeout(tm);
+    const q = inp.value.trim(); if (q.length < 2) { box.classList.remove('on'); return; }
+    tm = setTimeout(async () => {
+      const my = ++seq, local = searchAirports(q);
+      try {
+        const res = [...local, ...(await geocode(q).catch(() => []))].slice(0, 7); if (my !== seq) return;
+        box.innerHTML = '';
+        for (const r of res) {
+          const d = document.createElement('div');
+          d.innerHTML = `${r.ap ? '✈ ' : ''}${r.name}<small>${r.full}</small>`;
+          d.onmousedown = e => { e.preventDefault(); sel[key] = r; inp.value = r.name; box.classList.remove('on'); };
+          box.appendChild(d);
+        }
+        box.classList.toggle('on', res.length > 0);
+      } catch (e) {}
+    }, 550);
+  });
+  inp.addEventListener('blur', () => setTimeout(() => box.classList.remove('on'), 150));
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { box.classList.remove('on'); $('goBtn').click(); } });
+}
+setupInput($('inFrom'), $('sgFrom'), 'from');
+setupInput($('inTo'), $('sgTo'), 'to');
+$('swap').onclick = () => { [sel.from, sel.to] = [sel.to, sel.from]; [$('inFrom').value, $('inTo').value] = [$('inTo').value, $('inFrom').value]; };
+for (const [label, ia, ib] of PRESETS) {
+  const a = apPlace(apByIata[ia]), b = apPlace(apByIata[ib]);
+  const c = document.createElement('button'); c.className = 'chip'; c.textContent = label;
+  c.onclick = () => { sel.from = a; sel.to = b; $('inFrom').value = a.name; $('inTo').value = b.name; };
+  $('chips').appendChild(c);
+}
+try { const o = JSON.parse(localStorage.getItem('polet:opts') || '{}'); for (const k of ['oAir', 'oWind', 'oInv']) if (k in o) $(k).checked = o[k]; } catch (e) {}
+
+async function resolve(key, inp) {
+  if (sel[key]) return sel[key];
+  const q = inp.value.trim(); if (!q) throw new Error(`Укажите, ${key === 'from' ? 'откуда' : 'куда'} летим`);
+  const exact = apByIata[q.toUpperCase()];
+  const r = exact ? [apPlace(exact)] : await geocode(q).catch(() => searchAirports(q));
+  if (!r.length) throw new Error(`Не нашли «${q}»`);
+  return sel[key] = r[0];
+}
+$('goBtn').onclick = async () => {
+  const btn = $('goBtn'), st = $('status');
+  btn.disabled = true; st.textContent = '';
+  try {
+    Snd.init();
+    try { localStorage.setItem('polet:opts', JSON.stringify({ oAir: $('oAir').checked, oWind: $('oWind').checked, oInv: $('oInv').checked })); } catch (e) {}
+    const a = await resolve('from', $('inFrom')), b = await resolve('to', $('inTo'));
+    if (dist([a.lon, a.lat], [b.lon, b.lat]) < 25000) throw new Error('Слишком близко — выберите пункты дальше 25 км друг от друга');
+    const o = findAirport(a), d = findAirport(b);
+    if (dist(o.c, d.c) < 25000) throw new Error(`Оба пункта ведут в один аэропорт (${o.name}) — выберите другой`);
+    await Promise.all([ready(map), ready(mini)]);
+    while (!map.getSource('route')) await new Promise(r => setTimeout(r, 50));
+    st.textContent = '';
+    startFlight(o, d);
+    if (!o.rw || !d.rw) setTimeout(() => toast('Рядом нет аэропорта — построили полосу прямо на месте', 3000), 4600);
+  } catch (e) { st.textContent = e.message || 'Ошибка'; }
+  btn.disabled = false;
+};
+$('resumeBtn').onclick = togglePause;
+$('restartBtn').onclick = $('againBtn').onclick = () => startFlight(G.from, G.to);
+$('backBtn').onclick = () => startFlight(G.to, G.from);
+$('menuBtn').onclick = $('newBtn').onclick = () => { G.running = false; G.paused = false; $('hud').classList.remove('on'); $('touch').classList.remove('on'); show('startScr'); };
+</script>
+</body>
+</html>
