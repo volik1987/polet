@@ -27,6 +27,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:#0d1b2a;color:var(--tx
 #shadow,#plane{position:absolute;width:96px;height:96px;left:-48px;top:-48px}
 #shadow{filter:blur(2px);opacity:.4}
 #plane{filter:drop-shadow(0 6px 8px rgba(0,0,0,.35));transition:opacity .3s}
+#plane3d{position:absolute;width:300px;height:300px;left:-150px;top:-150px;transition:opacity .3s}
 #boom{position:absolute;left:-60px;top:-60px;width:120px;height:120px;border-radius:50%;opacity:0;
   background:radial-gradient(#fff6c2 0%,#ffb13b 30%,#ff4d1f 55%,rgba(60,20,10,0) 72%)}
 #boom.on{animation:boom 1.4s ease-out forwards}
@@ -137,6 +138,7 @@ kbd{font:12px ui-monospace,Menlo,monospace;padding:1px 5px;border-radius:4px;bac
   #ils{right:8px;top:136px;width:150px}
   #ilsBox{height:80px}
   #shadow,#plane{width:74px;height:74px;left:-37px;top:-37px}
+  #plane3d{width:230px;height:230px;left:-115px;top:-115px}
   #hint{bottom:8px;font-size:12px}
   #tbtns{left:8px;right:8px;bottom:12px}
   #stick{bottom:62px}#thrPad{bottom:62px}
@@ -152,6 +154,7 @@ kbd{font:12px ui-monospace,Menlo,monospace;padding:1px 5px;border-radius:4px;bac
 <div id="planeWrap">
   <svg id="shadow" viewBox="-50 -50 100 100"><use href="#shape" fill="#000"/></svg>
   <svg id="plane" viewBox="-50 -50 100 100"><use href="#shapeColor"/></svg>
+  <canvas id="plane3d"></canvas>
   <div id="boom"></div>
 </div>
 
@@ -475,7 +478,7 @@ function startFlight(o, d) {
   if (G.opts.wind) { const wd = Math.random() * 360, ws = 6 + Math.random() * 20; G.wind = { from: wd, spd: ws, e: -ws * Math.sin(wd * D2R), n: -ws * Math.cos(wd * D2R) }; }
   const fuel = Math.min(26000, G.total / 1000 * 3.6 * 1.5 + 2500);
   Object.assign(P, {
-    alt: 0, v: 0, hdg: G.orw.hdg, gamma: 0, bank: 0, thr: 0, flaps: true, brake: false, ground: true,
+    alt: 0, v: 0, hdg: G.orw.hdg, gamma: 0, bank: 0, p: 0, q: 0, thr: 0, flaps: true, brake: false, ground: true,
     phase: 'ground', fuel, fuelMax: fuel, simT: 0, ap: false, apAlt: 10000, overrun: false, airborne: false
   });
   [P.lon, P.lat] = offset(G.orw.a, G.orw.hdg, 120);
@@ -483,7 +486,7 @@ function startFlight(o, d) {
     [P.lon, P.lat] = offset(G.orw.b, G.orw.hdg, 9000);
     Object.assign(P, { alt: 3000, v: 150, thr: .75, flaps: false, ground: false, phase: 'air', airborne: true });
   }
-  G.trail = [[P.lon, P.lat]]; G.trailT = 0; G.realT = 0; G.tsWant = 1; G.zoomOff = 0;
+  G.camHdg = P.hdg; G.trail = [[P.lon, P.lat]]; G.trailT = 0; G.realT = 0; G.tsWant = 1; G.zoomOff = 0;
   G.zoomCur = zoomFor(P.alt); G.warnTxt = ''; G.hintT = 0;
 
   const rwF = fc([poly(rwPoly(G.orw), 'orig'), poly(rwPoly(G.drw), 'dest')]);
@@ -500,7 +503,7 @@ function startFlight(o, d) {
   const pts = [...G.route, G.orw.a, G.drw.b], lons = pts.map(p => p[0]), lats = pts.map(p => p[1]);
   mini.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 22, duration: 0 });
 
-  $('plane').style.opacity = 1; $('boom').classList.remove('on');
+  $('plane').style.opacity = $('plane3d').style.opacity = 1; $('boom').classList.remove('on');
   show(null); $('hud').classList.add('on'); setPad(); $('hud').classList.toggle('touch', touchMode); $('touch').classList.toggle('on', touchMode);
   G.running = true; G.paused = false;
   Snd.init(); Snd.ctx?.resume();
@@ -602,11 +605,15 @@ function controls(dt) {
   if (P.phase === 'air') {
     if (P.ap) autopilot(dt);
     else {
-      if (Math.abs(roll) > .05) P.bank += roll * 45 * dt;
-      else P.bank -= Math.sign(P.bank) * Math.min(Math.abs(P.bank), 25 * dt);
-      P.gamma += pitch * 7 * dt;
+      // ручка задаёт скорость крена и тангажа, самолёт откликается с инерцией
+      const pT = Math.abs(roll) > .05 ? roll * 16 : -P.bank * .3;
+      P.p += (pT - P.p) * Math.min(1, dt * 1.8);
+      P.bank += P.p * dt;
+      P.q += (pitch * 3.5 - P.q) * Math.min(1, dt * 1.6);
+      P.gamma += P.q * dt;
     }
-    P.bank = clamp(P.bank, -40, 40); P.gamma = clamp(P.gamma, -20, 18);
+    if (Math.abs(P.bank) >= 35) { P.bank = clamp(P.bank, -35, 35); P.p = 0; }
+    if (P.gamma >= 18 || P.gamma <= -20) { P.gamma = clamp(P.gamma, -20, 18); P.q = 0; }
   }
   return { roll, pitch };
 }
@@ -615,11 +622,12 @@ function autopilot(dt) {
   const dT = distToThr();
   if (dT < 25000 || dist(here, fix) < 4000) { P.ap = false; toast('Автопилот: точка захода. Дальше — сами! Ловите ромбики.', 4000); return; }
   const want = clamp(angDiff(P.hdg, brg(here, fix)) * 1.2, -25, 25);
-  P.bank += clamp(want - P.bank, -15 * dt, 15 * dt);
+  P.p = P.q = 0;
+  P.bank += clamp(want - P.bank, -6 * dt, 6 * dt);
   const tAlt = Math.min(P.apAlt, Math.max(1000, (dT - 18000) * .055 + 1000));
   const vs = clamp((tAlt - P.alt) / 12, -14, 11);
   const gT = Math.asin(clamp(vs / Math.max(P.v, 60), -.3, .3)) / D2R;
-  P.gamma += clamp(gT - P.gamma, -3 * dt, 3 * dt);
+  P.gamma += clamp(gT - P.gamma, -1.5 * dt, 1.5 * dt);
 }
 
 function step(dt, ctl) {
@@ -641,7 +649,8 @@ function step(dt, ctl) {
     P.v = Math.max(0, P.v + a * dt);
     G.stall = P.v < Vstall();
     if (G.stall) P.gamma = Math.max(-30, P.gamma - (6 + (Vstall() - P.v) * .6) * dt);
-    const turn = g * Math.tan(P.bank * D2R) / Math.max(P.v, 40) / D2R * 1.5;
+    // при ускорении времени разворот на экране не быстрее 6°/с
+    const turn = clamp(g * Math.tan(P.bank * D2R) / Math.max(P.v, 40) / D2R * 1.2, -6 / G.ts, 6 / G.ts);
     P.hdg = (P.hdg + turn * dt + 360) % 360;
     if (P.flaps && P.v > 128) { P.flaps = false; toast('Закрылки убраны автоматически (скорость > 450 км/ч)', 2000); }
   }
@@ -652,7 +661,7 @@ function step(dt, ctl) {
   P.lat += vn * dt / R / D2R;
   P.lon += ve * dt / (R * Math.cos(P.lat * D2R)) / D2R;
   if (!P.ground) {
-    P.alt += P.v * Math.sin(P.gamma * D2R) * dt;
+    P.alt += clamp(P.v * Math.sin(P.gamma * D2R), -150 / G.ts, 150 / G.ts) * dt;
     if (P.alt <= 0) { P.alt = 0; touchdown(); }
   }
   if (P.fuel > 0) {
@@ -695,7 +704,7 @@ const softness = vs => vs < 1.5 ? 'бархатная' : vs < 3 ? 'мягкая'
 function crash(reason) {
   P.phase = 'crashed'; P.v = 0; P.ap = false;
   $('boom').classList.remove('on'); void $('boom').offsetWidth; $('boom').classList.add('on');
-  $('plane').style.opacity = 0;
+  $('plane').style.opacity = $('plane3d').style.opacity = 0;
   setTimeout(() => endGame('crash', reason), 1500);
 }
 
@@ -745,12 +754,16 @@ function render(dt) {
   const zt = zoomFor(P.alt) + G.zoomOff;
   G.zoomCur += (zt - G.zoomCur) * Math.min(1, dt * 2.5);
   const pitch = [0, 55, 70][G.cam];
-  map.jumpTo({ center: [P.lon, P.lat], bearing: P.hdg, zoom: G.zoomCur, pitch });
+  // камера догоняет курс с запаздыванием — видно, как самолёт доворачивает
+  G.camHdg = (G.camHdg + angDiff(G.camHdg, P.hdg) * Math.min(1, dt * 1.2) + 360) % 360;
+  const yaw = angDiff(G.camHdg, P.hdg);
+  map.jumpTo({ center: [P.lon, P.lat], bearing: G.camHdg, zoom: G.zoomCur, pitch });
   $('haze').style.opacity = G.cam ? 1 : 0;
 
-  $('plane').style.transform = `perspective(500px) rotateY(${P.bank}deg) rotateX(${-P.gamma * 1.5}deg)`;
+  if (window.Plane3D) Plane3D.update(P.bank, P.gamma, yaw, pitch, dt);
+  else $('plane').style.transform = `rotate(${yaw}deg) perspective(500px) rotateY(${P.bank}deg) rotateX(${-P.gamma * 1.5}deg)`;
   const sh = Math.min(P.alt * .05, 40);
-  $('shadow').style.transform = `translate(${sh * .6}px,${sh}px) scale(${1 - Math.min(P.alt / 3000, .5)})`;
+  $('shadow').style.transform = `translate(${sh * .6}px,${sh}px) rotate(${yaw}deg) scale(${1 - Math.min(P.alt / 3000, .5)})`;
   $('shadow').style.opacity = Math.max(0, .4 - P.alt / 2500);
 
   hudT -= dt; if (hudT > 0) return; hudT = .1;
@@ -773,7 +786,7 @@ function render(dt) {
   const here = [P.lon, P.lat], dT = distToThr(), dC = dist(here, G.drw.a);
   const target = dT > 20000 ? offset(G.drw.a, G.drw.hdg + 180, Math.min(18000, dT)) : G.drw.a;
   const b = brg(here, target);
-  $('arrow').style.transform = `rotate(${angDiff(P.hdg, b)}deg)`;
+  $('arrow').style.transform = `rotate(${angDiff(G.camHdg, b)}deg)`;
   const eta = G.gsp > 5 ? fmtT(dC / G.gsp) : '—';
   $('navTxt').innerHTML = `<b>${G.to.name}</b> · ${(dC / 1000).toFixed(dC < 10000 ? 1 : 0)} км · курс ${String(Math.round(b)).padStart(3, '0')}° · ${eta}`;
 
@@ -920,6 +933,75 @@ $('resumeBtn').onclick = togglePause;
 $('restartBtn').onclick = $('againBtn').onclick = () => startFlight(G.from, G.to);
 $('backBtn').onclick = () => startFlight(G.to, G.from);
 $('menuBtn').onclick = $('newBtn').onclick = () => { G.running = false; G.paused = false; $('hud').classList.remove('on'); $('touch').classList.remove('on'); show('startScr'); };
+</script>
+<script type="module">
+/* 3D-модель самолёта: отдельный прозрачный холст поверх карты, камера смотрит под тем же углом, что и карта */
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js';
+const D2R = Math.PI / 180, cv = document.getElementById('plane3d');
+let rnd;
+try { rnd = new THREE.WebGLRenderer({ canvas: cv, alpha: true, antialias: true }); } catch (e) { cv.remove(); throw e; }
+rnd.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(28, 1, 50, 600);
+scene.add(new THREE.HemisphereLight(0xe4f1ff, 0x4d5a66, 1.5));
+const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(-40, 80, 30); scene.add(sun);
+
+const mat = (color, rough = .45, metal = .2) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
+const white = mat(0xf3f6f9), grey = mat(0xaeb9c4, .4, .5), blue = mat(0x1f6fd1, .35), dark = mat(0x16222e, .2, .6), red = mat(0xe5484d);
+const plane = new THREE.Group(), body = new THREE.Group();
+plane.add(body); scene.add(plane);
+const add = (geo, m, pos = [0, 0, 0], rot = [0, 0, 0]) => { const o = new THREE.Mesh(geo, m); o.position.set(...pos); o.rotation.set(...rot); body.add(o); return o; };
+
+// фюзеляж: тело вращения, нос смотрит в −Z
+const prof = [[0, -25], [.7, -24.6], [1.6, -22.5], [2.6, -18], [3, -13], [3, 15], [2.8, 18.5], [2.1, 21.5], [1, 23.6], [0, 24.4]]
+  .map(([r, y]) => new THREE.Vector2(r, y));
+add(new THREE.LatheGeometry(prof, 28), white, [0, 0, 0], [-Math.PI / 2, 0, 0]);
+// синяя полоса и окна кабины
+add(new THREE.CylinderGeometry(3.03, 3.03, 30, 28, 1, true, Math.PI * .42, Math.PI * .16), blue, [0, 0, -1], [Math.PI / 2, 0, 0]);
+add(new THREE.CylinderGeometry(3.03, 3.03, 30, 28, 1, true, -Math.PI * .58, Math.PI * .16), blue, [0, 0, -1], [Math.PI / 2, 0, 0]);
+const cockpit = add(new THREE.SphereGeometry(1.6, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.6), dark, [0, 1.15, -21.2]);
+cockpit.scale.set(1.15, .7, 1.4);
+
+const flat = (pts, depth, m, pos, rot, bevel = .25) => {
+  const sh = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y)));
+  const g = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2 });
+  g.translate(0, 0, -depth / 2);
+  return add(g, m, pos, rot);
+};
+// крылья (x — вбок, y формы — вперёд), стреловидные, с поперечным V
+for (const s of [1, -1]) {
+  const w = flat([[0, 4.5], [20 * s, -5], [20 * s, -7.5], [0, -4.5]].map(([x, y]) => [x, y]), .5, white, [2.6 * s, -1.3, -1], [-Math.PI / 2, 0, .07 * s]);
+  // законцовка-винглет
+  flat([[0, 0], [1.6, 0], [2.4, 3], [1.2, 3]], .25, blue, [22.4 * s, .1, 4], [0, -Math.PI / 2, 0], .1);
+  // двигатель
+  add(new THREE.CylinderGeometry(1.45, 1.15, 6.5, 20), grey, [8.5 * s, -2.9, -3.4], [Math.PI / 2, 0, 0]);
+  add(new THREE.CircleGeometry(1.3, 20), dark, [8.5 * s, -2.9, -6.66], [Math.PI, 0, 0]);
+  add(new THREE.BoxGeometry(.5, 1.6, 4), grey, [8.5 * s, -1.9, -2.2]);
+  // стабилизатор
+  flat([[0, 2], [7.5 * s, -2.5], [7.5 * s, -4.2], [0, -2.6]], .35, white, [1.4 * s, .6, 20.5], [-Math.PI / 2, 0, .1 * s], .15);
+  // навигационные огни
+  add(new THREE.SphereGeometry(.45, 8, 6), s > 0 ? mat(0x2bd46a) : red, [22.6 * s, .2, 5]);
+}
+// киль
+flat([[0, 0], [7.5, 0], [10, 10], [6.5, 10]], .45, blue, [0, 2.4, 13.5], [0, -Math.PI / 2, 0], .15);
+
+const DIST = 195;
+let size = 0, t = 0;
+window.Plane3D = {
+  update(bank, gamma, yaw, camPitch, dt) {
+    const w = cv.clientWidth;
+    if (w !== size) { size = w; rnd.setSize(w, w, false); }
+    t += dt;
+    const p = camPitch * D2R;
+    cam.position.set(0, DIST * Math.cos(p), DIST * Math.sin(p));
+    cam.up.set(0, Math.sin(p), -Math.cos(p));
+    cam.lookAt(0, 0, 0);
+    plane.rotation.set(gamma * 1.3 * D2R, -yaw * D2R, -bank * D2R, 'YXZ');
+    body.position.y = Math.sin(t * 1.3) * .35;
+    body.rotation.z = Math.sin(t * .9) * .012;
+    rnd.render(scene, cam);
+  }
+};
+document.getElementById('plane').style.display = 'none';
 </script>
 </body>
 </html>
